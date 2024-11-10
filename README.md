@@ -30,7 +30,7 @@
 
 1. 克隆项目
 ```bash
-git clone https://github.com/bu950223/edge-tts-web----ui.git
+git clone https://github.com/bu950223/edge-tts-web-ui.git
 cd edge-tts-web----ui
 ```
 
