@@ -63,7 +63,7 @@
 
 1. 克隆项目
 ```bash
-git clone https://github.com/bu950223/edge-tts-web-ui.git
+git clone https://github.com/D6397/edge-tts-web-ui.git
 cd edge-tts-web----ui
 ```
 
@@ -82,7 +82,7 @@ python app.py
 #### 使用 docker-compose（推荐）
 1. 克隆项目
 ```bash
-git clone https://github.com/bu950223/edge-tts-web-ui.git
+git clone https://github.com/D6397/edge-tts-web-ui.git
 cd edge-tts-web
 ```
 
