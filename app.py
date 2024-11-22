@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -12,6 +12,18 @@ import json
 from mutagen.mp3 import MP3
 import time
 from datetime import datetime, timedelta
+import logging
+from functools import lru_cache
+import shutil
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('tts.log', encoding='utf-8')
+    ]
+)
 
 app = FastAPI()
 
@@ -29,7 +41,7 @@ app.add_middleware(
 os.makedirs("static/audio", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# 添加根路径处理
+# 添加根���径处理
 @app.get("/")
 async def read_root():
     return FileResponse('index.html')
@@ -38,7 +50,7 @@ async def read_root():
 @app.get('/favicon.ico')
 async def favicon():
     try:
-        # 直接使用网站根目录的 favicon.ico
+        # 直接用网站根目录的 favicon.ico
         favicon_path = '/www/wwwroot/favicon.ico'
         if os.path.exists(favicon_path):
             return FileResponse(
@@ -70,56 +82,144 @@ class Voice(BaseModel):
     gender: str
     language: str
 
-# 缓存可用的声音列表
+# 缓存可用的声音列
 VOICE_CACHE = {}
+
+# 缓存声音列表，每小时更新一次
+@lru_cache(maxsize=1)
+def get_cache_key():
+    """生成基于小时的缓存键"""
+    now = datetime.now()
+    return now.strftime("%Y%m%d%H")
 
 async def get_voices():
     try:
-        if not VOICE_CACHE:
-            print("Fetching voices from edge-tts...")
-            voices = await edge_tts.list_voices()
-            print(f"Got {len(voices)} voices from edge-tts")
+        cache_key = get_cache_key()
+        if cache_key in VOICE_CACHE:
+            return VOICE_CACHE[cache_key]
+        
+        print("Fetching voices from edge-tts...")
+        voices = await edge_tts.list_voices()
+        print(f"Got {len(voices)} voices from edge-tts")
+        
+        # 初始化语言分类字典
+        voice_dict = {}
+        
+        for voice in voices:
+            # 将所有中文声音统一到 zh-CN
+            lang = "zh-CN" if voice["Locale"].startswith("zh") else voice["Locale"]
             
-            for voice in voices:
-                lang = voice["Locale"]
-                if lang not in VOICE_CACHE:
-                    VOICE_CACHE[lang] = []
+            if lang not in voice_dict:
+                voice_dict[lang] = []
+            
+            # 添加更友好的声音名称
+            friendly_name = {
+                # 中文普通话 - 男声
+                "zh-CN-YunjianNeural": "云健 (标准男声)",
+                "zh-CN-YunxiNeural": "云希 (阳光男声)",
+                "zh-CN-YunxiaNeural": "云夏 (男童声)",
+                "zh-CN-YunyangNeural": "云扬 (新闻男声)",
+                "zh-CN-YunfengNeural": "云峰 (成熟男声)",
+                "zh-CN-YunzeNeural": "云泽 (温柔男声)",
+                "zh-CN-YunhaoNeural": "云浩 (商务男声)",
+                "zh-CN-YunleNeural": "云乐 (活力男声)",
+                "zh-CN-YunxuanNeural": "云轩 (青年男声)",
+                "zh-CN-YunqiangNeural": "云强 (浑厚男声)",
+                "zh-CN-YunpengNeural": "云鹏 (书生男声)",
+                "zh-CN-YunwenNeural": "云文 (儒雅男声)",
+                "zh-CN-YunchengNeural": "云程 (知性男声)",
+                "zh-CN-YunhuiNeural": "云辉 (磁性男声)",
+                "zh-CN-YunminNeural": "云敏 (清新男声)",
                 
-                # 添加更友好的声音名称
-                friendly_name = {
-                    # 中文声音
-                    "zh-CN-XiaoxiaoNeural": "晓晓 (年轻女声)",
-                    "zh-CN-XiaoyiNeural": "晓伊 (少女声)",
-                    "zh-CN-YunjianNeural": "云健 (年轻男声)",
-                    "zh-CN-YunxiNeural": "云希 (少年声)",
-                    "zh-CN-YunxiaNeural": "云夏 (男童声)",
-                    "zh-CN-YunyangNeural": "云扬 (新闻播音)",
-                    "zh-CN-liaoning-XiaobeiNeural": "晓北 (东北女声)",
-                    "zh-HK-HiuGaaiNeural": "晓佳 (港式女声)",
-                    "zh-HK-HiuMaanNeural": "晓曼 (港式女声)",
-                    "zh-HK-WanLungNeural": "云龙 (港式男声)",
-                    "zh-TW-HsiaoChenNeural": "晓辰 (台湾女声)",
-                    "zh-TW-YunJheNeural": "云哲 (台湾男声)",
-                    "zh-TW-HsiaoYuNeural": "晓雨 (台湾女声)",
-                    # 英文声音
-                    "en-US-JennyNeural": "Jenny (美式女声)",
-                    "en-US-GuyNeural": "Guy (美式男声)",
-                    "en-GB-SoniaNeural": "Sonia (英式女声)",
-                    "en-GB-RyanNeural": "Ryan (英式男声)",
-                    # 日文声音
-                    "ja-JP-NanamiNeural": "七海 (日本女声)",
-                    "ja-JP-KeitaNeural": "圭太 (日本男声)",
-                }.get(voice["ShortName"], voice["ShortName"])
+                # 中文普通话 - 女声
+                "zh-CN-XiaoxiaoNeural": "晓晓 (标准女声)",
+                "zh-CN-XiaoyiNeural": "晓伊 (温柔女声)",
+                "zh-CN-XiaohanNeural": "晓涵 (活力女声)",
+                "zh-CN-XiaomengNeural": "晓梦 (甜美女声)",
+                "zh-CN-XiaomoNeural": "晓墨 (文艺女声)",
+                "zh-CN-XiaoxuanNeural": "晓萱 (知性女声)",
+                "zh-CN-XiaoruiNeural": "晓睿 (儿童女声)",
+                "zh-CN-XiaoshuangNeural": "晓双 (青年女声)",
+                "zh-CN-XiaoyanNeural": "晓妍 (邻家女声)",
+                "zh-CN-XiaochenNeural": "晓辰 (自然女声)",
+                "zh-CN-XiaoqiuNeural": "晓秋 (温暖女声)",
+                "zh-CN-XiaozhenNeural": "晓珍 (优雅女声)",
+                "zh-CN-XiaohuiNeural": "晓慧 (干练女声)",
+                "zh-CN-XiaolingNeural": "晓玲 (甜美女声)",
+                "zh-CN-XiaoxuanNeural": "晓轩 (标准女声)",
+                "zh-CN-XiaoyouNeural": "晓悠 (柔美女声)",
+                "zh-CN-XiaoqingNeural": "晓青 (清新女声)",
+                "zh-CN-XiaorongNeural": "晓蓉 (标准女声)",
+                "zh-CN-XiaoyanNeural": "晓妍 (时尚女声)",
+                "zh-CN-XiaojingNeural": "晓静 (标准女声)",
+                "zh-CN-XiaohuanNeural": "晓欢 (活泼女声)",
+                "zh-CN-XiaoyunNeural": "晓云 (标准女声)",
+                "zh-CN-XiaolingNeural": "晓玲 (标准女声)",
+                "zh-CN-XiaoxianNeural": "晓仙 (空灵女声)",
+                "zh-CN-XiaoxueNeural": "晓雪 (清纯女声)",
                 
-                print(f"Adding voice: {friendly_name} ({voice['ShortName']})")
+                # 中文方言 - 男声
+                "zh-CN-shandong-YunxiangNeural": "云翔 (山东话)",
+                "zh-CN-sichuan-YunxiNeural": "云希 (四川话)",
+                "zh-CN-henan-YundengNeural": "云登 (河南话)",
+                "zh-CN-hubei-YunrongNeural": "云荣 (湖北话)",
+                "zh-CN-shanxi-YunjiangNeural": "云江 (山西话)",
+                "zh-CN-guangdong-YunrongNeural": "云荣 (粤语男声)",
+                "zh-CN-hebei-YunboNeural": "云博 (河北话)",
+                "zh-CN-hunan-YunwenNeural": "云文 (湖南话)",
+                "zh-CN-jiangxi-YunfengNeural": "云峰 (江西话)",
+                "zh-CN-guizhou-YunhaoNeural": "云浩 (贵州话)",
                 
-                VOICE_CACHE[lang].append({
-                    "id": voice["ShortName"],
-                    "name": friendly_name,
-                    "gender": voice["Gender"].lower(),
-                    "language": lang
-                })
-        return VOICE_CACHE
+                # 中文方言 - 女声
+                "zh-CN-liaoning-XiaobeiNeural": "晓北 (东北话)",
+                "zh-CN-shaanxi-XiaoniNeural": "晓妮 (陕西话)",
+                "zh-CN-zhijiang-XiaotongNeural": "晓彤 (长江话)",
+                "zh-CN-jiangsu-XiaoleiNeural": "晓蕾 (江苏话)",
+                "zh-CN-zhejiang-XiaonianNeural": "晓年 (浙江话)",
+                "zh-CN-guangxi-XiaominNeural": "晓敏 (桂林话)",
+                "zh-CN-fujian-XiaomeiNeural": "晓梅 (闽南话)",
+                "zh-CN-anhui-XiaoruiNeural": "晓睿 (安徽话)",
+                "zh-CN-yunnan-XiaojingNeural": "晓静 (云南话)",
+                "zh-CN-gansu-XiaoqingNeural": "晓青 (甘肃话)",
+                
+                # 港台声音
+                "zh-HK-HiuGaaiNeural": "晓佳 (粤语女声)",
+                "zh-HK-HiuMaanNeural": "晓曼 (粤语女声)",
+                "zh-HK-WanLungNeural": "云龙 (粤男声)",
+                "zh-TW-HsiaoChenNeural": "晓辰 (台湾女声)",
+                "zh-TW-YunJheNeural": "云哲 (台湾男声)",
+                "zh-TW-HsiaoYuNeural": "晓雨 (台湾女声)",
+                "zh-TW-HsiaoTungNeural": "晓彤 (台湾女声)",
+                "zh-TW-YunFuNeural": "云甫 (台湾男声)",
+                
+                # 英文声音
+                "en-US-GuyNeural": "Guy (美式男声)",
+                "en-US-DavisNeural": "Davis (美式男声)",
+                "en-US-TonyNeural": "Tony (美式男声)",
+                "en-US-JennyNeural": "Jenny (美式女声)",
+                "en-US-AriaNeural": "Aria (美式女声)",
+                "en-GB-RyanNeural": "Ryan (英式男声)",
+                "en-GB-SoniaNeural": "Sonia (英式女声)",
+                
+                # 日文声音
+                "ja-JP-KeitaNeural": "圭太 (日本男声)",
+                "ja-JP-DaichiNeural": "大智 (日本男声)",
+                "ja-JP-NanamiNeural": "七海 (日本女声)",
+                "ja-JP-AoiNeural": "葵 (日本女声)",
+            }.get(voice["ShortName"], voice["ShortName"])
+            
+            print(f"Adding voice: {friendly_name} ({voice['ShortName']})")
+            
+            voice_dict[lang].append({
+                "id": voice["ShortName"],
+                "name": friendly_name,
+                "gender": voice["Gender"].lower(),
+                "language": lang
+            })
+        
+        # 更新缓存
+        VOICE_CACHE[cache_key] = voice_dict
+        return voice_dict
     except Exception as e:
         print(f"Error in get_voices: {str(e)}")
         raise
@@ -133,20 +233,110 @@ async def list_voices(language: str = "zh-CN", gender: Optional[str] = None):
         
         # 获取所有匹配语言前缀的声音
         filtered_voices = []
-        for lang, voice_list in voices.items():
-            print(f"Checking language: {lang}")
-            if lang.startswith(language):
-                filtered_voices.extend(voice_list)
+        
+        # 处理中文声音（包括普通话、方言、港台）
+        if language == "zh-CN":
+            # 收集所有中文相关声音
+            for lang, voice_list in voices.items():
+                if lang.startswith("zh-"):  # 匹配所有中文声音（包括 zh-CN, zh-HK, zh-TW）
+                    filtered_voices.extend(voice_list)
+                elif lang == "zh":  # 防止可能的其他中文变体
+                    filtered_voices.extend(voice_list)
+        else:
+            # 其他语言的常规匹配
+            for lang, voice_list in voices.items():
+                if lang.startswith(language):
+                    filtered_voices.extend(voice_list)
         
         print(f"Found {len(filtered_voices)} voices before gender filter")
         
+        # 应用性别过滤
         if gender:
-            filtered_voices = [v for v in filtered_voices if v["gender"] == gender.lower()]
+            def is_matching_voice(voice):
+                voice_id = voice["id"].lower()
+                name = voice["name"].lower()
+                
+                # 通用匹配规则
+                if gender.lower() == "male":
+                    if (
+                        voice["gender"].lower() == "male" or
+                        "男" in name or
+                        ("云" in name and "晓" not in name) or  # 确保是云字辈且不包含晓字
+                        (any(x in voice_id.lower() for x in [
+                            "yun", "wan", "-yun"
+                        ]) and not any(x in voice_id.lower() for x in [
+                            "xiao", "hiu", "hsiao"  # 排除包含女声标识的ID
+                        ]))
+                    ):
+                        return True
+                else:  # female
+                    if (
+                        voice["gender"].lower() == "female" or
+                        "女" in name or
+                        ("晓" in name and "云" not in name) or  # 确保是晓字辈且不包含云字
+                        (any(x in voice_id.lower() for x in [
+                            "xiao", "hiu", "hsiao", "-xiao"
+                        ]) and not any(x in voice_id.lower() for x in [
+                            "yun", "wan"  # 排除包含男声标识的ID
+                        ]))
+                    ):
+                        return True
+                return False
+            
+            filtered_voices = [v for v in filtered_voices if is_matching_voice(v)]
             print(f"Found {len(filtered_voices)} voices after gender filter")
+            
+            # 打印过滤后的声音详情
+            for voice in filtered_voices:
+                print(f"Filtered voice: {voice['name']} ({voice['id']}, {voice['gender']})")
         
-        # 打印找到的声音
-        for voice in filtered_voices:
-            print(f"Voice: {voice['name']} ({voice['id']})")
+        # 按特定顺序排序
+        def sort_key(voice):
+            # 定义声音类型的排序优先级
+            voice_type_order = {
+                "标准": 1,
+                "新闻": 2,
+                "成熟": 3,
+                "阳光": 4,
+                "温柔": 5,
+                "商务": 6,
+                "活力": 7,
+                "磁性": 8,
+                "浑厚": 9,
+                "书生": 10,
+                "儒雅": 11,
+                "男童": 12,
+                "东北": 13,
+                "山东": 14,
+                "四川": 15,
+                "河南": 16,
+                "湖北": 17,
+                "山西": 18,
+                "河北": 19,
+                "湖南": 20,
+                "江西": 21,
+                "贵州": 22,
+                "江苏": 23,
+                "浙江": 24,
+                "广西": 25,
+                "福建": 26,
+                "安徽": 27,
+                "云南": 28,
+                "甘肃": 29,
+                "粤语": 30,
+                "闽南": 31,
+                "台湾": 32,
+            }
+            
+            # 获取声音类型的排序值
+            name = voice["name"]
+            for key, value in voice_type_order.items():
+                if key in name:
+                    return value
+            return 100  # 其他类型放到最后
+            
+        # 先按类型排序，然后按名称排序
+        filtered_voices.sort(key=lambda x: (sort_key(x), x["name"]))
         
         return filtered_voices
     except Exception as e:
@@ -164,24 +354,27 @@ def format_duration(seconds):
 async def generate_audio(request: TTSRequest):
     try:
         # 验证请求参数
-        if not request.text:
-            raise ValueError("文本内容不能为空")
+        if not request.text.strip():
+            raise HTTPException(status_code=400, detail="文本内容不能为空")
         if not request.voice_id:
-            raise ValueError("未选择声音")
+            raise HTTPException(status_code=400, detail="未选择声音")
+        if not 0.25 <= request.speed <= 4:
+            raise HTTPException(status_code=400, detail="语速设置无效")
             
         # 生成文件名时包含用户ID
         filename = f"{request.user_id}_{str(uuid.uuid4())}"
         audio_path = f"static/audio/{filename}.mp3"
         subtitle_path = f"static/audio/{filename}.srt"
         
+        # 确保目录存在
+        os.makedirs("static/audio", exist_ok=True)
+        
         try:
+            logging.info(f"Starting audio generation for user {request.user_id}")
             print(f"Starting audio generation...")
             print(f"Text: {request.text[:100]}...")
             print(f"Voice ID: {request.voice_id}")
             print(f"Speed: {request.speed}")
-            
-            # 确保目录存在
-            os.makedirs("static/audio", exist_ok=True)
             
             # 修改语速格式
             speed_percentage = int((request.speed - 1) * 100)
@@ -189,6 +382,22 @@ async def generate_audio(request: TTSRequest):
             print(f"Calculated rate: {rate}")
             
             try:
+                # 验证文本长度
+                if len(request.text) > 10000:  # 设置合理的文本长度限制
+                    raise HTTPException(status_code=400, detail="文本内容过长")
+                
+                # 验证语速范围
+                if not 0.25 <= request.speed <= 4:
+                    raise HTTPException(status_code=400, detail="语速必须在 0.25 到 4 之间")
+                
+                # 验证声音ID是否存在
+                voices = await get_voices()
+                available_voices = []
+                for voice_list in voices.values():
+                    available_voices.extend([v["id"] for v in voice_list])
+                if request.voice_id not in available_voices:
+                    raise HTTPException(status_code=400, detail="选择的声不可用")
+                
                 # 设置语音参数并生成
                 communicate = edge_tts.Communicate(
                     text=request.text,
@@ -203,7 +412,7 @@ async def generate_audio(request: TTSRequest):
                 subtitle_data = []
                 subtitle_index = 1
                 
-                # 用于合并字幕的临时存储
+                # 用于合并幕的临时存储
                 temp_text = []
                 temp_start = None
                 temp_end = None
@@ -316,7 +525,7 @@ async def generate_audio(request: TTSRequest):
                         "url": f"/static/audio/{filename}.mp3",
                         "name": f"{filename}.mp3",
                         "size": f"{file_size / 1024:.1f}KB",
-                        "duration": duration,  # 使用实际计算的时长
+                        "duration": duration,  # 使实际计算的时长
                         "id": filename
                     }
                 })
@@ -329,34 +538,36 @@ async def generate_audio(request: TTSRequest):
                 raise ValueError(f"TTS生成失败: {str(e)}")
             
         except Exception as e:
-            print(f"Error in generation process: {str(e)}")
+            logging.error(f"Error in generation process: {str(e)}")
             # 清理可能部分生成的文件
             for path in [audio_path, subtitle_path]:
                 if os.path.exists(path):
                     try:
                         os.remove(path)
-                        print(f"Cleaned up file: {path}")
                     except Exception as cleanup_error:
-                        print(f"Error cleaning up file {path}: {str(cleanup_error)}")
+                        logging.error(f"Error cleaning up file {path}: {str(cleanup_error)}")
             raise
             
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Final error handler: {str(e)}")
+        logging.error(f"Unexpected error: {str(e)}")
         error_message = str(e)
         
         # 处理常见错误
-        if "Connection refused" in error_message:
-            error_message = "无法连接到语音服务，请稍后重试"
-        elif "Invalid rate" in error_message:
-            error_message = "语速设置无效，请使用正确的语速值"
-        elif "Invalid voice" in error_message:
-            error_message = "选择的声音无效，请重新选择"
-        elif "TTS generation failed" in error_message:
-            error_message = "语音生成失败，请重试"
-        elif "No such file" in error_message:
-            error_message = "文件生成失败，请重试"
+        error_mapping = {
+            "Connection refused": "无法连接到语音服务，请稍后重试",
+            "Invalid rate": "语速设置无效，请使用正确的语速值",
+            "Invalid voice": "选择的声音无效，请重新选择",
+            "TTS generation failed": "语音生成失败，请重试",
+            "No such file": "文件生成失败，请重试"
+        }
         
-        # 返回更友好的错误信息
+        for key, value in error_mapping.items():
+            if key in error_message:
+                error_message = value
+                break
+        
         raise HTTPException(
             status_code=500,
             detail={
@@ -434,7 +645,7 @@ async def get_subtitle(audio_id: str):
             raise
         raise HTTPException(status_code=500, detail=str(e))
 
-# 添加时间格式化辅助函数
+# 添加时间格式辅助函数
 def format_time(ms):
     """将毫秒转换为 SRT 时间格式 (HH:MM:SS,mmm)"""
     hours = ms // 3600000
@@ -443,35 +654,126 @@ def format_time(ms):
     milliseconds = ms % 1000
     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
 
-# 添加清理函数
+# 优化文件清理函数
 async def cleanup_old_files():
     """清理超过30分钟的音频和字幕文件"""
     while True:
         try:
-            print("Starting cleanup check...")
+            logging.info("Starting cleanup check...")
             current_time = time.time()
             audio_dir = "static/audio"
+            files_cleaned = 0
+            total_size_cleaned = 0
             
-            # 遍历音频目录
+            # 获取所有文件及其信息
+            files = []
             for filename in os.listdir(audio_dir):
-                file_path = os.path.join(audio_dir, filename)
-                # 获取文件修改时间
-                file_mtime = os.path.getmtime(file_path)
-                # 如果文件超过30分钟
-                if current_time - file_mtime > 30 * 60:  # 30分钟 = 1800秒
-                    try:
-                        os.remove(file_path)
-                        print(f"Cleaned up old file: {filename}")
-                    except Exception as e:
-                        print(f"Error deleting file {filename}: {str(e)}")
+                try:
+                    file_path = os.path.join(audio_dir, filename)
+                    stat = os.stat(file_path)
+                    files.append({
+                        'path': file_path,
+                        'name': filename,
+                        'mtime': stat.st_mtime,
+                        'size': stat.st_size
+                    })
+                except Exception as e:
+                    logging.error(f"Error getting file info for {filename}: {str(e)}")
             
-            print("Cleanup check completed")
+            # 按修改时间排序，先删除最旧的文件
+            files.sort(key=lambda x: x['mtime'])
+            
+            for file_info in files:
+                try:
+                    if current_time - file_info['mtime'] > 30 * 60:  # 30分钟
+                        os.remove(file_info['path'])
+                        files_cleaned += 1
+                        total_size_cleaned += file_info['size']
+                        logging.info(f"Cleaned up: {file_info['name']} ({file_info['size'] / 1024:.1f}KB)")
+                except Exception as e:
+                    logging.error(f"Error deleting file {file_info['name']}: {str(e)}")
+            
+            if files_cleaned > 0:
+                logging.info(f"Cleanup completed: removed {files_cleaned} files, freed {total_size_cleaned / 1024 / 1024:.1f}MB")
             
         except Exception as e:
-            print(f"Error during cleanup: {str(e)}")
+            logging.error(f"Error during cleanup: {str(e)}", exc_info=True)
         
-        # 等待5分钟后再次检查
-        await asyncio.sleep(5 * 60)  # 5分钟 = 300秒
+        await asyncio.sleep(5 * 60)  # 5分钟检查一次
+
+# 修改日志中间件的实现
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    try:
+        start_time = time.time()
+        response = await call_next(request)
+        process_time = time.time() - start_time
+        logging.info(
+            f"{request.client.host}:{request.client.port} - "
+            f"\"{request.method} {request.url.path} HTTP/{request.scope.get('http_version', '1.1')}\" "
+            f"{response.status_code} - {process_time:.2f}s"
+        )
+        return response
+    except Exception as e:
+        logging.error(f"Error in request logging: {str(e)}", exc_info=True)
+        return await call_next(request)
+
+# 修改错误处理器
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    logging.error(
+        f"HTTP error: {exc.status_code} - {exc.detail} - "
+        f"Path: {request.url.path} - "
+        f"Client: {request.client.host}"
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"message": str(exc.detail)}
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    logging.error(
+        f"Unexpected error: {str(exc)} - "
+        f"Path: {request.url.path} - "
+        f"Client: {request.client.host}",
+        exc_info=True
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"message": "服务器内部错误，请稍后重试"}
+    )
+
+@app.get("/health")
+async def health_check():
+    """健康检查接口"""
+    try:
+        # 检查存储目录
+        if not os.path.exists("static/audio"):
+            raise Exception("Audio directory not found")
+        
+        # 检查存储空间
+        total, used, free = shutil.disk_usage("/")
+        if free < 1024 * 1024 * 100:  # 小于100MB空间时报警
+            raise Exception("Low disk space")
+        
+        # 检查 Edge TTS 服务
+        voices = await edge_tts.list_voices()
+        if not voices:
+            raise Exception("No voices available")
+        
+        return {
+            "status": "healthy",
+            "disk_space": {
+                "total": f"{total / 1024 / 1024 / 1024:.1f}GB",
+                "used": f"{used / 1024 / 1024 / 1024:.1f}GB",
+                "free": f"{free / 1024 / 1024 / 1024:.1f}GB"
+            },
+            "voices_count": len(voices)
+        }
+    except Exception as e:
+        logging.error(f"Health check failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=503, detail=str(e))
 
 # 修改主函数，启动清理任务
 if __name__ == "__main__":
