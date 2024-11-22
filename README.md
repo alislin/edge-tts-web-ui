@@ -15,6 +15,39 @@
 - 🔒 用户隔离：独立的用户空间
 - 📱 响应式设计：完美支持移动端
 
+
+# 更新日志
+
+## [1.1.0] - 2024-01-09
+
+### 新增功能
+- 支持 74 种语言和 318 种声音选项
+- 添加现代化响应式用户界面
+- 新增音频文件缓存系统
+- 添加播放历史记录功能
+- 实现一键删除音频功能
+- 新增音频管理 API 接口
+- 添加 Docker 支持，提供容器化部署方案
+
+### 优化改进
+- 优化语音选择界面，支持快速切换语言和性别
+- 改进音频播放控制，提供实时播放状态
+- 优化文件管理系统，提供更好的存储结构
+- 完善用户隔离机制，提升数据安全性
+- 改进自动清理机制，更高效的资源管理
+
+### 部署更新
+- 新增 Dockerfile 用于构建 Docker 镜像
+- 新增 docker-compose.yml 简化部署流程
+- 添加数据卷配置，支持音频文件持久化
+- 支持环境变量配置，如时区设置
+
+### API 更新
+- 新增 `/api/audio/list/{user_id}` 接口获取用户音频列表
+- 新增 `/api/audio/{audio_id}` 接口删除指定音频
+- 优化 `/api/voices` 接口，支持语言和性别筛选
+- 完善 `/api/generate` 接口参数说明
+
 ## 📸 演示
 
 ![主界面](screenshots/main.png)
@@ -45,6 +78,42 @@ python app.py
 ```
 
 访问 http://localhost:8005 即可使用
+
+#### 使用 docker-compose（推荐）
+1. 克隆项目
+```bash
+git clone https://github.com/bu950223/edge-tts-web-ui.git
+cd edge-tts-web
+```
+
+2. 启动服务
+```bash
+docker-compose up -d
+```
+
+3. 访问服务
+```
+http://localhost:8005
+```
+
+#### 手动构建 Docker 镜像
+1. 构建镜像
+```bash
+docker build -t edge-tts-web .
+```
+
+2. 运行容器
+```bash
+docker run -d \
+  --name edge-tts-web \
+  -p 8005:8005 \
+  -v $(pwd)/static/audio:/app/static/audio \
+  edge-tts-web
+```
+
+3. 访问服务
+```
+http://localhost:8005
 
 ## 📝 API 文档
 
