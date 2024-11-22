@@ -35,9 +35,7 @@
                 <div class="mb-6">
                     <label class="block text-sm font-medium text-gray-700 mb-2">语言</label>
                     <select id="languageSelect" class="w-full rounded-lg border border-gray-300 p-2 custom-select focus:border-purple-500 focus:ring focus:ring-purple-500">
-                        <option value="zh-CN">中文 (大陆)</option>
-                        <option value="zh-HK">中文 (香港)</option>
-                        <option value="zh-TW">中文 (台湾)</option>
+                        <option value="zh-CN">中文</option>
                         <option value="en-US">英语 (美国)</option>
                         <option value="en-GB">英语 (英国)</option>
                         <option value="ja-JP">日语</option>
@@ -114,12 +112,12 @@
     <script>
         // 修改全局状态管理
         const state = {
-            selectedLanguage: 'zh-CN',  // 修改初始语言为 zh-CN
+            selectedLanguage: 'zh-CN',
             selectedGender: 'male',
             selectedVoice: null,
             selectedSpeed: 1,
             autoplay: true,
-            userId: generateUserId()  // 添加用户ID
+            userId: generateUserId()
         };
 
         // 修改 API 端点配置
@@ -127,7 +125,8 @@
             VOICES: '/api/voices',
             GENERATE: '/api/generate',
             DELETE: '/api/audio/',
-            LIST_AUDIO: '/api/audio'  // 用户ID会在请求时添加
+            LIST_AUDIO: '/api/audio',
+            SUBTITLE: '/api/subtitle'
         };
 
         // 添加生成用户ID的函数
@@ -211,9 +210,68 @@
             setTimeout(() => notification.remove(), 3000);
         }
 
-        // 修改生成音频函
+        // 添加防抖函数
+        function debounce(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
+        }
+
+        // 添加音频缓存
+        const audioCache = new Map();
+
+        // 修改音频播放相关代码
+        async function playAudio(url, button) {
+            try {
+                let audio;
+                if (audioCache.has(url)) {
+                    audio = audioCache.get(url);
+                } else {
+                    audio = new Audio(url);
+                    audioCache.set(url, audio);
+                    
+                    // 添加错误处理
+                    audio.addEventListener('error', (e) => {
+                        console.error('Audio playback error:', e);
+                        showError('播放音频失败，请重试');
+                        button.innerHTML = getPlayButtonHTML(false);
+                    });
+                }
+                
+                if (currentAudio && currentAudio !== audio) {
+                    currentAudio.pause();
+                    if (currentPlayBtn) {
+                        currentPlayBtn.innerHTML = getPlayButtonHTML(false);
+                    }
+                }
+                
+                if (audio.paused) {
+                    await audio.play();
+                    button.innerHTML = getPlayButtonHTML(true);
+                } else {
+                    audio.pause();
+                    button.innerHTML = getPlayButtonHTML(false);
+                }
+                
+                currentAudio = audio;
+                currentPlayBtn = button;
+                
+            } catch (error) {
+                console.error('播放音频失败:', error);
+                showError('播放音频失败，请重试');
+                button.innerHTML = getPlayButtonHTML(false);
+            }
+        }
+
+        // 修改生成音频函数，添加输入验证
         async function generateAudio() {
-            const text = document.getElementById('textInput').value;
+            const text = document.getElementById('textInput').value.trim();
             if (!text) {
                 showError('请输入要转换的文字');
                 return;
@@ -222,17 +280,16 @@
                 showError('请选择一个声音');
                 return;
             }
-
+            
             const generateBtn = document.getElementById('generateBtn');
             const generateSpinner = document.getElementById('generateSpinner');
             const generateBtnText = document.getElementById('generateBtnText');
-
+            
             try {
-                // 显示加载状态
                 generateBtn.disabled = true;
                 generateSpinner.classList.remove('hidden');
                 generateBtnText.textContent = '生成中...';
-
+                
                 const response = await fetch(API_ENDPOINTS.GENERATE, {
                     method: 'POST',
                     headers: {
@@ -243,18 +300,24 @@
                         voice_id: state.selectedVoice,
                         speed: state.selectedSpeed,
                         autoplay: state.autoplay,
-                        user_id: state.userId  // 添加用户ID
+                        user_id: state.userId
                     })
                 });
-
+                
                 const result = await response.json();
                 
                 if (!response.ok) {
-                    throw new Error(result.detail?.message || result.detail || '生成音频失败');
+                    throw new Error(result.detail?.error || result.detail?.message || result.detail || '生成音频失败');
                 }
-
+                
                 if (result.success) {
                     addAudioToList(result.audio);
+                    if (state.autoplay) {
+                        const audioElement = document.querySelector(`[data-audio-url="${result.audio.url}"]`);
+                        if (audioElement) {
+                            await playAudio(result.audio.url, audioElement);
+                        }
+                    }
                 } else {
                     throw new Error(result.message || '生成音频失败');
                 }
@@ -262,7 +325,6 @@
                 console.error('生成音频失败:', error);
                 showError(error.message || '生成音频失败，请稍后重试');
             } finally {
-                // 恢复按钮状态
                 generateBtn.disabled = false;
                 generateSpinner.classList.add('hidden');
                 generateBtnText.textContent = '开始生成音频';
@@ -325,7 +387,10 @@
             }
         }
 
-        // 事件监听器设置
+        // 使用防抖处理语音列表获取
+        const debouncedFetchVoices = debounce(fetchVoices, 300);
+
+        // 修改事件监听器，使用事件委托
         document.addEventListener('DOMContentLoaded', () => {
             // 改语言选择的事件监听器
             document.getElementById('languageSelect').addEventListener('change', (e) => {
@@ -365,7 +430,7 @@
                 
                 state.selectedVoice = voiceId;
                 
-                // 更新所有声音按钮的样式
+                // 更新所声音按钮的样式
                 document.querySelectorAll('.voice-button').forEach(btn => {
                     const isSelected = btn.dataset.voiceId === state.selectedVoice;
                     btn.classList.toggle('bg-purple-50', isSelected);
@@ -411,118 +476,24 @@
             // 生成按钮
             document.getElementById('generateBtn').addEventListener('click', generateAudio);
 
-            // 音频操作
+            // 使用事件委托处理音频操作
             document.getElementById('audioList').addEventListener('click', async (e) => {
                 const target = e.target.closest('button');
                 if (!target) return;
-
-                if (target.classList.contains('play-btn')) {
-                    const audioUrl = target.dataset.audioUrl;
-                    
-                    // 如果点击的是当前正在播放的音频
-                    if (currentAudio && currentPlayBtn === target) {
-                        if (currentAudio.paused) {
-                            currentAudio.play();
-                            target.innerHTML = getPlayButtonHTML(true);
-                        } else {
-                            currentAudio.pause();
-                            target.innerHTML = getPlayButtonHTML(false);
-                        }
-                        return;
+                
+                try {
+                    if (target.classList.contains('play-btn')) {
+                        await playAudio(target.dataset.audioUrl, target);
+                    } else if (target.classList.contains('download-btn')) {
+                        window.open(target.dataset.audioUrl, '_blank');
+                    } else if (target.classList.contains('subtitle-btn')) {
+                        await downloadSubtitle(target.dataset.audioId);
+                    } else if (target.classList.contains('delete-btn')) {
+                        await deleteAudio(target);
                     }
-                    
-                    // 停止当前播放的音频
-                    if (currentAudio) {
-                        currentAudio.pause();
-                        if (currentPlayBtn) {
-                            currentPlayBtn.innerHTML = getPlayButtonHTML(false);
-                        }
-                    }
-                    
-                    // 播放新的音频
-                    currentAudio = new Audio(audioUrl);
-                    currentPlayBtn = target;
-                    
-                    currentAudio.addEventListener('ended', () => {
-                        target.innerHTML = getPlayButtonHTML(false);
-                        currentAudio = null;
-                        currentPlayBtn = null;
-                    });
-                    
-                    currentAudio.addEventListener('play', () => {
-                        target.innerHTML = getPlayButtonHTML(true);
-                    });
-                    
-                    currentAudio.addEventListener('pause', () => {
-                        target.innerHTML = getPlayButtonHTML(false);
-                    });
-                    
-                    currentAudio.play();
-                } else if (target.classList.contains('download-btn')) {
-                    window.open(target.dataset.audioUrl, '_blank');
-                } else if (target.classList.contains('subtitle-btn')) {
-                    const audioId = target.dataset.audioId;
-                    try {
-                        // 添加延迟和重试机制
-                        let retries = 3;
-                        let success = false;
-                        
-                        while (retries > 0 && !success) {
-                            try {
-                                // 等待一小段时间
-                                await new Promise(resolve => setTimeout(resolve, 500));
-                                
-                                const response = await fetch(`/api/subtitle/${audioId}`);
-                                if (!response.ok) {
-                                    if (response.status === 404) {
-                                        if (retries === 1) {
-                                            showError('字幕文件不在');
-                                            return;
-                                        }
-                                    } else {
-                                        throw new Error('下载失败');
-                                    }
-                                } else {
-                                    const blob = await response.blob();
-                                    const url = window.URL.createObjectURL(blob);
-                                    const a = document.createElement('a');
-                                    a.href = url;
-                                    a.download = audioId + '.srt';
-                                    document.body.appendChild(a);
-                                    a.click();
-                                    window.URL.revokeObjectURL(url);
-                                    document.body.removeChild(a);
-                                    success = true;
-                                    break;
-                                }
-                            } catch (error) {
-                                console.error(`尝试 ${4-retries}/3 失败:`, error);
-                            }
-                            retries--;
-                        }
-                        
-                        if (!success) {
-                            showError('下载字幕失败，请稍后重试');
-                        }
-                    } catch (error) {
-                        console.error('下载字幕失败:', error);
-                        showError('下载字幕失败，请稍后重试');
-                    }
-                } else if (target.classList.contains('delete-btn')) {
-                    try {
-                        await fetch(`${API_ENDPOINTS.DELETE}${target.dataset.audioId}`, {
-                            method: 'DELETE'
-                        });
-                        // 如果删除的是正在播放的音频，停止播放
-                        if (currentAudio && currentPlayBtn && currentPlayBtn.closest('.flex') === target.closest('.flex')) {
-                            currentAudio.pause();
-                            currentAudio = null;
-                            currentPlayBtn = null;
-                        }
-                        target.closest('.flex').remove();
-                    } catch (error) {
-                        console.error('删除音频失败:', error);
-                    }
+                } catch (error) {
+                    console.error('操作失败:', error);
+                    showError('操作失败，请重试');
                 }
             });
 
@@ -547,6 +518,84 @@
                     <polygon points="5 3 19 12 5 21 5 3"></polygon>
                 </svg>
             `;
+        }
+
+        // 添加下载字幕的函数
+        async function downloadSubtitle(audioId) {
+            try {
+                // 添加延迟和重试机制
+                let retries = 3;
+                let success = false;
+                
+                while (retries > 0 && !success) {
+                    try {
+                        // 等待一小段时间
+                        await new Promise(resolve => setTimeout(resolve, 500));
+                        
+                        const response = await fetch(`${API_ENDPOINTS.SUBTITLE}/${audioId}`);
+                        if (!response.ok) {
+                            if (response.status === 404) {
+                                if (retries === 1) {
+                                    showError('字幕文件不存在');
+                                    return;
+                                }
+                            } else {
+                                throw new Error('下载失败');
+                            }
+                        } else {
+                            const blob = await response.blob();
+                            const url = window.URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = audioId + '.srt';
+                            document.body.appendChild(a);
+                            a.click();
+                            window.URL.revokeObjectURL(url);
+                            document.body.removeChild(a);
+                            success = true;
+                            break;
+                        }
+                    } catch (error) {
+                        console.error(`尝试 ${4-retries}/3 失败:`, error);
+                    }
+                    retries--;
+                }
+                
+                if (!success) {
+                    showError('下载字幕失败，请稍后重试');
+                }
+            } catch (error) {
+                console.error('下载字幕失败:', error);
+                showError('下载字幕失败，请稍后重试');
+            }
+        }
+
+        // 添加删除音频的函数
+        async function deleteAudio(button) {
+            try {
+                const audioId = button.dataset.audioId;
+                const response = await fetch(`${API_ENDPOINTS.DELETE}${audioId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) {
+                    throw new Error('删除失败');
+                }
+                
+                // 如果删除的是正在播放的音频，停止播放
+                if (currentAudio && currentPlayBtn && currentPlayBtn.closest('.flex') === button.closest('.flex')) {
+                    currentAudio.pause();
+                    currentAudio = null;
+                    currentPlayBtn = null;
+                }
+                
+                // 从界面移除音频项
+                button.closest('.flex').remove();
+                
+            } catch (error) {
+                console.error('删除音频失败:', error);
+                showError('删除音频失败，请重试');
+            }
         }
     </script>
 </body>
