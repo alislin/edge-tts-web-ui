@@ -3,6 +3,7 @@
 基于 Microsoft Edge 浏览器 TTS 引擎的在线语音合成系统，提供简单易用的 Web 界面。
 文本转语音（TTS），字幕生成（SRT）
 [English](README_EN.md) | 简体中文
+文本转语音
 
 ## ✨ 特性
 
