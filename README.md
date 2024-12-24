@@ -5,6 +5,8 @@
 [English](README_EN.md) | 简体中文
 文本转语音
 
+
+##新版本https://github.com/D6397/edge-tts-web
 ## ✨ 特性
 
 - 🌍 支持多语言：中文（简体、繁体、粤语）、英语、日语等 74 种语言
